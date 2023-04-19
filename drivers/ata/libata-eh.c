@@ -638,8 +638,11 @@ void ata_scsi_cmd_error_handler(struct Scsi_Host *host, struct ata_port *ap,
 	 * handler doesn't diddle with those qcs.  This must
 	 * be done atomically w.r.t. setting ATA_QCFLAG_EH.
 	 */
-	if (nr_timedout)
+	if (nr_timedout) {
+		if (ap->ops->print_regs)
+			ap->ops->print_regs(ap);
 		__ata_port_freeze(ap);
+	}
 
 	/* initialize eh_tries */
 	ap->eh_tries = ATA_EH_MAX_TRIES;
@@ -1003,6 +1006,7 @@ static int ata_do_link_abort(struct ata_port *ap, struct ata_link *link)
 		}
 	}
 
+	pr_err("nr_aborted: %d\n", nr_aborted);
 	if (!nr_aborted)
 		ata_port_schedule_eh(ap);
 
@@ -1437,6 +1441,8 @@ static bool ata_eh_request_sense(struct ata_queued_cmd *qc)
 						cmd->sense_buffer, tf.lbah,
 						tf.lbam, tf.lbal);
 			qc->flags |= ATA_QCFLAG_SENSE_VALID;
+			pr_err("%s: tag: %d had sense: sk: %#x asc: %#x ascq: %#x\n",
+			       __func__, qc->tag, tf.lbah, tf.lbam, tf.lbal);
 			return true;
 		}
 	} else {
@@ -1955,6 +1961,7 @@ static void ata_eh_get_success_sense(struct ata_link *link)
 	if (!(ehc->i.dev_action[dev->devno] & ATA_EH_GET_SUCCESS_SENSE))
 		return;
 
+	pr_err("Reading Successful NCQ Commands log\n");
 	/* if frozen, we can't do much */
 	if (ata_port_is_frozen(ap)) {
 		ata_dev_warn(dev,
@@ -2004,6 +2011,7 @@ out:
 			continue;
 
 		/* This success command had sense data, but we failed to get. */
+		pr_err("tag: %d had sense, but failed to get\n", qc->tag);
 		ata_scsi_set_sense(dev, qc->scsicmd, ABORTED_COMMAND, 0, 0);
 		qc->flags |= ATA_QCFLAG_SENSE_VALID;
 	}
@@ -3916,6 +3924,9 @@ void ata_eh_finish(struct ata_port *ap)
 	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_EH))
 			continue;
+
+		pr_err("%s: qc tag: %d cmd: %#x flags: %#lx err_mask: %#x tf->status: %#x scmd->result: %#x\n",
+		       __func__, qc->tag, qc->tf.command, qc->flags, qc->err_mask, qc->result_tf.status, qc->scsicmd->result);
 
 		if (qc->err_mask) {
 			/* FIXME: Once EH migration is complete,

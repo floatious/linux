@@ -286,6 +286,7 @@ static void scsi_eh_inc_host_failed(struct rcu_head *head)
 
 	spin_lock_irqsave(shost->host_lock, flags);
 	shost->host_failed++;
+	pr_err("%s: busy: %d failed: %d\n", __func__, scsi_host_busy(shost), shost->host_failed);
 	scsi_eh_wakeup(shost);
 	spin_unlock_irqrestore(shost->host_lock, flags);
 }

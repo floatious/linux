@@ -1524,6 +1524,7 @@ static unsigned ata_exec_internal_sg(struct ata_device *dev,
 
 	/* no internal command while frozen */
 	if (ata_port_is_frozen(ap)) {
+		pr_err("cannot exec internal command while port is frozen!!!\n");
 		spin_unlock_irqrestore(ap->lock, flags);
 		return AC_ERR_SYSTEM;
 	}
@@ -1541,6 +1542,7 @@ static unsigned ata_exec_internal_sg(struct ata_device *dev,
 	preempted_tag = link->active_tag;
 	preempted_sactive = link->sactive;
 	preempted_qc_active = ap->qc_active;
+	pr_err("%s: preempted_qc_active = %#llx\n", __func__, preempted_qc_active);
 	preempted_nr_active_links = ap->nr_active_links;
 	link->active_tag = ATA_TAG_POISON;
 	link->sactive = 0;
@@ -1646,6 +1648,8 @@ static unsigned ata_exec_internal_sg(struct ata_device *dev,
 	ata_qc_free(qc);
 	link->active_tag = preempted_tag;
 	link->sactive = preempted_sactive;
+	pr_err("%s: resetting ap->qc_active to: %#llx (current value: %#llx)\n",
+	       __func__, preempted_qc_active, ap->qc_active);
 	ap->qc_active = preempted_qc_active;
 	ap->nr_active_links = preempted_nr_active_links;
 
@@ -4833,7 +4837,11 @@ void __ata_qc_complete(struct ata_queued_cmd *qc)
 	 * is called. (when rc != 0 and atapi request sense is needed)
 	 */
 	qc->flags &= ~ATA_QCFLAG_ACTIVE;
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_port_warn(ap, "before completing command ap->qc_active: %#llx\n", ap->qc_active);
 	ap->qc_active &= ~(1ULL << qc->tag);
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_port_warn(ap, "after completing command ap->qc_active: %#llx\n", ap->qc_active);
 
 	/* call completion callback */
 	qc->complete_fn(qc);
@@ -4920,6 +4928,10 @@ void ata_qc_complete(struct ata_queued_cmd *qc)
 		if (unlikely(qc->flags & ATA_QCFLAG_EH)) {
 			fill_result_tf(qc);
 			trace_ata_qc_complete_failed(qc);
+			if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+				pr_err("qc tag: %d cmd: %#x flags: %#lx err_mask: %#x tf->status: %#x scmd->result: %#x\n",
+				       qc->tag, qc->tf.command, qc->flags, qc->err_mask, qc->result_tf.status, qc->scsicmd->result);
+			pr_err("scheduling EH (aborted cmd) for qc tag: %d\n", qc->tag);
 			ata_qc_schedule_eh(qc);
 			return;
 		}
@@ -4957,6 +4969,10 @@ void ata_qc_complete(struct ata_queued_cmd *qc)
 			 * trigger fast drain, and freeze the port.
 			 */
 			ap->pflags |= ATA_PFLAG_EH_PENDING;
+			if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+				pr_err("qc tag: %d cmd: %#x flags: %#lx err_mask: %#x tf->status: %#x scmd->result: %#x\n",
+				       qc->tag, qc->tf.command, qc->flags, qc->err_mask, qc->result_tf.status, qc->scsicmd->result);
+			pr_err("scheduling EH (success cmd) for qc tag: %d\n", qc->tag);
 			ata_qc_schedule_eh(qc);
 			return;
 		}
@@ -5064,6 +5080,9 @@ void ata_qc_issue(struct ata_queued_cmd *qc)
 
 	qc->flags |= ATA_QCFLAG_ACTIVE;
 	ap->qc_active |= 1ULL << qc->tag;
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_dev_warn(ap->link.device, "just issued: %#llx mask is now: %#llx\n",
+			     1ULL << qc->tag, ap->qc_active);
 
 	/*
 	 * We guarantee to LLDs that they will have at least one

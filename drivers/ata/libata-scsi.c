@@ -1695,6 +1695,10 @@ static void ata_scsi_qc_complete(struct ata_queued_cmd *qc)
 	if (need_sense && !ap->ops->error_handler)
 		ata_dump_status(ap, &qc->result_tf);
 
+	if (qc->flags & ATA_QCFLAG_EH)
+		pr_err("%s: qc tag: %d cmd: %#x flags: %#lx err_mask: %#x tf->status: %#x scmd->result: %#x\n",
+		       __func__, qc->tag, qc->tf.command, qc->flags, qc->err_mask, qc->result_tf.status, qc->scsicmd->result);
+
 	ata_qc_done(qc);
 }
 

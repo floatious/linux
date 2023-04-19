@@ -63,6 +63,7 @@ static enum ata_completion_errors ahci_qc_prep(struct ata_queued_cmd *qc);
 static int ahci_pmp_qc_defer(struct ata_queued_cmd *qc);
 static void ahci_freeze(struct ata_port *ap);
 static void ahci_thaw(struct ata_port *ap);
+static void ahci_print_regs(struct ata_port *ap);
 static void ahci_set_aggressive_devslp(struct ata_port *ap, bool sleep);
 static void ahci_enable_fbs(struct ata_port *ap);
 static void ahci_disable_fbs(struct ata_port *ap);
@@ -169,6 +170,7 @@ struct ata_port_operations ahci_ops = {
 	.error_handler		= ahci_error_handler,
 	.post_internal_cmd	= ahci_post_internal_cmd,
 	.dev_config		= ahci_dev_config,
+	.print_regs		= ahci_print_regs,
 
 	.scr_read		= ahci_scr_read,
 	.scr_write		= ahci_scr_write,
@@ -686,6 +688,7 @@ void ahci_start_engine(struct ata_port *ap)
 	tmp = readl(port_mmio + PORT_CMD);
 	tmp |= PORT_CMD_START;
 	writel(tmp, port_mmio + PORT_CMD);
+	pr_info("writing PORT_CMD_START to PORT_CMD\n");
 	readl(port_mmio + PORT_CMD); /* flush */
 }
 EXPORT_SYMBOL_GPL(ahci_start_engine);
@@ -728,6 +731,7 @@ int ahci_stop_engine(struct ata_port *ap)
 	/* setting HBA to idle */
 	tmp &= ~PORT_CMD_START;
 	writel(tmp, port_mmio + PORT_CMD);
+	pr_info("clearing PORT_CMD_START from PORT_CMD\n");
 
 	/* wait for engine to stop. This could be as long as 500 msec */
 	tmp = ata_wait_register(ap, port_mmio + PORT_CMD,
@@ -1855,6 +1859,10 @@ static void ahci_qc_complete(struct ata_port *ap, void __iomem *port_mmio)
 	struct ahci_port_priv *pp = ap->private_data;
 	u32 qc_active = 0;
 	int rc;
+	const u32 *fis32;
+	const u8 *fis;
+	u32 tfd;
+	u8 tfd_status, tfd_error;
 
 	/*
 	 * pp->active_link is not reliable once FBS is enabled, both
@@ -1873,6 +1881,23 @@ static void ahci_qc_complete(struct ata_port *ap, void __iomem *port_mmio)
 		else
 			qc_active = readl(port_mmio + PORT_CMD_ISSUE);
 	}
+
+	tfd = readl(port_mmio + PORT_TFDATA);
+	tfd_status = tfd & 0xFF;
+	tfd_error = (tfd & 0xFF00) >> 8;
+	ata_port_warn(ap, "PxSACT: %#x TFD status: %#x TFD error: %#x\n",
+		      readl(port_mmio + PORT_SCR_ACT), tfd_status, tfd_error);
+	ata_port_warn(ap, "PxCI: %#x TFD status: %#x TFD error: %#x\n",
+		      readl(port_mmio + PORT_CMD_ISSUE), tfd_status, tfd_error);
+
+	fis = pp->rx_fis + RX_FIS_SDB;
+	fis32 = (u32*)fis;
+	ata_port_warn(ap, "FIS Rx Area: last SDB: finished: %#x status: %#x error: %#x\n",
+		      fis32[1], fis[2], fis[3]);
+
+	fis = pp->rx_fis + RX_FIS_D2H_REG;
+	ata_port_warn(ap, "FIS Rx Area: last D2H: status: %#x error: %#x\n",
+		      fis[2], fis[3]);
 
 	rc = ata_qc_complete_multiple(ap, qc_active);
 	if (unlikely(rc < 0 && !(ap->pflags & ATA_PFLAG_RESETTING))) {
@@ -1903,7 +1928,11 @@ static void ahci_handle_port_interrupt(struct ata_port *ap,
 		 * received SDB FISes notifying successful completions.
 		 * Handle these first and then handle the error.
 		 */
+		if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+			ata_dev_err(ap->link.device, "error irq, PxIS: %#x\n", status);
 		ahci_qc_complete(ap, port_mmio);
+		if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+			ata_dev_err(ap->link.device, "error irq now calling ahci_error_intr()\n");
 		ahci_error_intr(ap, status);
 		return;
 	}
@@ -1941,6 +1970,8 @@ static void ahci_handle_port_interrupt(struct ata_port *ap,
 	}
 
 	/* Handle completed commands */
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_dev_err(ap->link.device, "normal irq, PxIS: %#x\n", status);
 	ahci_qc_complete(ap, port_mmio);
 }
 
@@ -2184,9 +2215,49 @@ static void ahci_qc_ncq_fill_rtf(struct ata_port *ap, u64 done_mask)
 	}
 }
 
+static void ahci_print_regs(struct ata_port *ap)
+{
+	struct ahci_port_priv *pp = ap->private_data;
+	struct ahci_host_priv *hpriv = ap->host->private_data;
+	void __iomem *port_mmio = ahci_port_base(ap);
+	void __iomem *mmio = hpriv->mmio;
+	u32 qc_active = 0;
+	u32 port_irq_stat, port_irq_mask;
+	u32 host_irq_stat, host_irq_en;
+	const u32 *fis32;
+	const u8 *fis;
+
+	if (ap->qc_active && pp->active_link->sactive)
+		qc_active = readl(port_mmio + PORT_SCR_ACT);
+	else
+		qc_active = readl(port_mmio + PORT_CMD_ISSUE);
+
+	ata_port_warn(ap, "PxSACT: %#x\n", qc_active);
+
+	//print FIS Receive Area
+	fis = pp->rx_fis + RX_FIS_SDB;
+	fis32 = (u32*)fis;
+	ata_port_warn(ap, "FIS Rx Area: last SDB: finished: %#x status: %#x error: %#x\n",
+		      fis32[1], fis[2], fis[3]);
+
+	//print PxIS and PxIE
+	port_irq_stat = readl(port_mmio + PORT_IRQ_STAT);
+	port_irq_mask = readl(port_mmio + PORT_IRQ_MASK);
+	ata_port_warn(ap, "port_irq_stat: %#x port_irq_mask: %#x\n",
+		      port_irq_stat, port_irq_mask);
+
+	host_irq_stat = readl(mmio + HOST_IRQ_STAT);
+	host_irq_en = readl(mmio + HOST_IRQ_EN);
+	ata_port_warn(ap, "host_irq_stat: %#x host_irq_en: %#x\n",
+		      host_irq_stat, host_irq_en);
+}
+
 static void ahci_freeze(struct ata_port *ap)
 {
 	void __iomem *port_mmio = ahci_port_base(ap);
+
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_dev_err(ap->link.device, "freezing port!\n");
 
 	/* turn IRQ off */
 	writel(0, port_mmio + PORT_IRQ_MASK);
@@ -2199,6 +2270,9 @@ static void ahci_thaw(struct ata_port *ap)
 	void __iomem *port_mmio = ahci_port_base(ap);
 	u32 tmp;
 	struct ahci_port_priv *pp = ap->private_data;
+
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED)
+		ata_dev_err(ap->link.device, "thawing port!\n");
 
 	/* clear IRQ */
 	tmp = readl(port_mmio + PORT_IRQ_STAT);

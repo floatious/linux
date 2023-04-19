@@ -650,6 +650,12 @@ int ata_qc_complete_multiple(struct ata_port *ap, u64 qc_active)
 	}
 
 	done_mask = ap_qc_active ^ qc_active;
+	if (ap->link.device->flags & ATA_DFLAG_CDL_ENABLED) {
+		ata_dev_err(ap->link.device, "done_mask: %#llx (host active: %#llx hba active: %#llx)\n",
+			    done_mask, ap_qc_active, qc_active);
+		ata_dev_err(ap->link.device, "mask after clearing bits should be: %#llx\n",
+			    ap->qc_active & ~done_mask);
+	}
 
 	if (unlikely(done_mask & qc_active)) {
 		ata_port_err(ap, "illegal qc_active transition (%08llx->%08llx)\n",
@@ -1453,6 +1459,7 @@ int ata_eh_read_sense_success_ncq_log(struct ata_link *link)
 
 	sense_valid = (u64)buf[8] | ((u64)buf[9] << 8) |
 		((u64)buf[10] << 16) | ((u64)buf[11] << 24);
+	pr_err("sense_valid: %#llx\n", sense_valid);
 
 	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_EH) ||
@@ -1467,6 +1474,8 @@ int ata_eh_read_sense_success_ncq_log(struct ata_link *link)
 		 */
 		if (!(sense_valid & (1ULL << tag))) {
 			qc->result_tf.status &= ~ATA_SENSE;
+			pr_err("tag: %d not set in sense_valid\n",
+			       qc->tag);
 			continue;
 		}
 
@@ -1485,6 +1494,8 @@ int ata_eh_read_sense_success_ncq_log(struct ata_link *link)
 					qc->scsicmd->sense_buffer, sk,
 					asc, ascq);
 		qc->flags |= ATA_QCFLAG_SENSE_VALID;
+		pr_err("(success) tag: %d had sense: sk: %#x asc: %#x ascq: %#x\n",
+		       qc->tag, sk, asc, ascq);
 
 		/*
 		 * If we have sense data, call scsi_check_sense() in order to
@@ -1574,6 +1585,10 @@ void ata_eh_analyze_ncq_error(struct ata_link *link)
 			ata_scsi_set_sense_information(dev, qc->scsicmd,
 						       &qc->result_tf);
 			qc->flags |= ATA_QCFLAG_SENSE_VALID;
+			pr_err("(ncq autosense) tag: %d had sense: sk: %#x asc: %#x ascq: %#x\n",
+			       qc->tag, sense_key, asc, ascq);
+			pr_err("(ncq autosense) tag: %d now has: flags: %#lx err_mask: %#x tf->status: %#x scmd->result: %#x\n",
+			       qc->tag, qc->flags, qc->err_mask, qc->result_tf.status, qc->scsicmd->result);
 		}
 	}
 
