@@ -971,6 +971,8 @@ void ata_std_sched_eh(struct ata_port *ap)
 	if (ap->pflags & ATA_PFLAG_INITIALIZING)
 		return;
 
+	pr_err("%s\n", __func__);
+
 	ata_eh_set_pending(ap, 1);
 	scsi_schedule_eh(ap->scsi_host);
 
@@ -993,6 +995,8 @@ EXPORT_SYMBOL_GPL(ata_std_sched_eh);
 void ata_std_end_eh(struct ata_port *ap)
 {
 	struct Scsi_Host *host = ap->scsi_host;
+
+	pr_err("%s\n", __func__);
 
 	host->host_eh_scheduled = 0;
 }
@@ -1179,6 +1183,10 @@ static void __ata_eh_qc_complete(struct ata_queued_cmd *qc)
 	struct ata_port *ap = qc->ap;
 	struct scsi_cmnd *scmd = qc->scsicmd;
 	unsigned long flags;
+
+	if (qc->flags & ATA_QCFLAG_ISSUED_VIA_EH)
+		pr_err("%s: issued_via_eh cmd. qc->active ? %d\n", __func__,
+		       !!(qc->flags & ATA_QCFLAG_ACTIVE));
 
 	spin_lock_irqsave(ap->lock, flags);
 	qc->scsidone = ata_eh_scsidone;
@@ -2111,6 +2119,7 @@ static void ata_eh_issue_deferred_cmd(struct ata_link *link)
 		    ata_dev_phys_link(qc->dev) != link)
 			continue;
 
+		pr_err("%s: issuing QC via EH!!\n", __func__);
 		ata_issue_via_eh(qc);
 	}
 	ata_eh_done(link, dev, ATA_EH_ISSUE_DEFERRED_CMD);
@@ -4034,6 +4043,9 @@ void ata_eh_finish(struct ata_port *ap)
 	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_EH))
 			continue;
+
+		if (qc->flags & ATA_QCFLAG_ISSUED_VIA_EH)
+			pr_err("%s: issued_via_eh cmd\n", __func__);
 
 		if (qc->err_mask) {
 			/* FIXME: Once EH migration is complete,

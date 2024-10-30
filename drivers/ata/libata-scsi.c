@@ -1674,6 +1674,9 @@ static void ata_scsi_qc_complete(struct ata_queued_cmd *qc)
 	bool is_ck_cond_request = cdb[2] & 0x20;
 	bool is_error = qc->err_mask != 0;
 
+	if (qc->flags & ATA_QCFLAG_ISSUED_VIA_EH)
+		pr_err("%s: issued_via_eh cmd\n", __func__);
+
 	/* For ATA pass thru (SAT) commands, generate a sense block if
 	 * user mandated it or if there's an error.  Note that if we
 	 * generate because the user forced us to [CK_COND=1], a check
@@ -1692,6 +1695,9 @@ static void ata_scsi_qc_complete(struct ata_queued_cmd *qc)
 	} else if (is_error && !have_sense) {
 		ata_gen_ata_sense(qc);
 	}
+
+	if (!ata_is_ncq(qc->tf.protocol))
+		pr_err("%s completing non-NCQ command, qc: %px\n", __func__, qc);
 
 	ata_qc_done(qc);
 }
@@ -4171,8 +4177,10 @@ int __ata_scsi_queuecmd(struct scsi_cmnd *scmd, struct ata_device *dev)
 	 * specific lock), so we can have received an error irq since then,
 	 * therefore we must check if EH is pending, while holding ap->lock.
 	 */
-	if (ap->pflags & (ATA_PFLAG_EH_PENDING | ATA_PFLAG_EH_IN_PROGRESS))
+	if (ap->pflags & (ATA_PFLAG_EH_PENDING | ATA_PFLAG_EH_IN_PROGRESS)) {
+		pr_err("%s: deferring command\n", __func__);
 		return SCSI_MLQUEUE_DEVICE_BUSY;
+	}
 
 	if (unlikely(!scmd->cmd_len))
 		goto bad_cdb_len;

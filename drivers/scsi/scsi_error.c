@@ -65,11 +65,15 @@ void scsi_eh_wakeup(struct Scsi_Host *shost, unsigned int busy)
 {
 	lockdep_assert_held(shost->host_lock);
 
+	pr_err("%s: busy: %u host_failed: %u\n", __func__, busy, shost->host_failed);
+
 	if (busy == shost->host_failed) {
 		trace_scsi_eh_wakeup(shost);
 		wake_up_process(shost->ehandler);
 		SCSI_LOG_ERROR_RECOVERY(5, shost_printk(KERN_INFO, shost,
 			"Waking error handler thread\n"));
+	} else {
+		pr_err("%s: not waking error handler thread\n", __func__);
 	}
 }
 
@@ -88,6 +92,7 @@ void scsi_schedule_eh(struct Scsi_Host *shost)
 	if (scsi_host_set_state(shost, SHOST_RECOVERY) == 0 ||
 	    scsi_host_set_state(shost, SHOST_CANCEL_RECOVERY) == 0) {
 		shost->host_eh_scheduled++;
+		pr_err("%s: host_eh_scheduled: %u\n", __func__, shost->host_eh_scheduled);
 		scsi_eh_wakeup(shost, scsi_host_busy(shost));
 	}
 
@@ -287,6 +292,7 @@ static void scsi_eh_inc_host_failed(struct rcu_head *head)
 
 	spin_lock_irqsave(shost->host_lock, flags);
 	shost->host_failed++;
+	pr_err("%s: busy: %d host_failed: %d\n", __func__, scsi_host_busy(shost), shost->host_failed);
 	scsi_eh_wakeup(shost, busy);
 	spin_unlock_irqrestore(shost->host_lock, flags);
 }
@@ -2320,6 +2326,9 @@ int scsi_error_handler(void *data)
 				     shost->host_no, shost->host_eh_scheduled,
 				     shost->host_failed,
 				     scsi_host_busy(shost)));
+		pr_err("%s: waking up %d/%d/%d\n",
+		       __func__, shost->host_eh_scheduled, shost->host_failed,
+		       scsi_host_busy(shost));
 
 		/*
 		 * We have a host that is failing for some reason.  Figure out
@@ -2341,6 +2350,7 @@ int scsi_error_handler(void *data)
 
 		/* All scmds have been handled */
 		shost->host_failed = 0;
+		pr_err("%s: busy: %d host_failed: %d\n", __func__, scsi_host_busy(shost), shost->host_failed);
 
 		/*
 		 * Note - if the above fails completely, the action is to take

@@ -1633,6 +1633,15 @@ unsigned int ata_exec_internal(struct ata_device *dev, struct ata_taskfile *tf,
 	return err_mask;
 }
 
+static void ata_qc_complete_internal_qc(struct ata_queued_cmd *qc)
+{
+	struct completion *waiting = qc->private_data;
+
+	pr_err("%s\n", __func__);
+
+	complete(waiting);
+}
+
 /**
  *	ata_issue_via_eh - issue non-NCQ command via EH synchronously
  *	@qc: command to issue to device
@@ -1690,7 +1699,7 @@ unsigned int ata_issue_via_eh(struct ata_queued_cmd *qc)
 	qc->flags &= ~ATA_QCFLAG_NEED_ISSUE_VIA_EH;
 	qc->flags |= ATA_QCFLAG_ISSUED_VIA_EH | ATA_QCFLAG_RESULT_TF;
 	qc->private_data = &wait;
-	qc->complete_fn = ata_qc_complete_internal;
+	qc->complete_fn = ata_qc_complete_internal_qc;
 
 	ata_qc_issue(qc);
 
@@ -1712,6 +1721,8 @@ unsigned int ata_issue_via_eh(struct ata_queued_cmd *qc)
 	ata_eh_acquire(ap);
 
 	ata_sff_flush_pio_task(ap);
+
+	pr_err("%s rc=%d\n", __func__, rc);
 
 	if (!rc) {
 		/*
@@ -4702,12 +4713,16 @@ int ata_std_qc_defer(struct ata_queued_cmd *qc)
 	if (ata_is_ncq(qc->tf.protocol)) {
 		if (!ata_tag_valid(link->active_tag))
 			return 0;
+		pr_err_ratelimited("%s: deferring NCQ command\n", __func__);
 		return ATA_DEFER_LINK;
 	} else {
 		if (!ata_tag_valid(link->active_tag) && !link->sactive)
 			return 0;
-		if (ata_tag_valid(link->active_tag))
+		if (ata_tag_valid(link->active_tag)) {
+			pr_err_ratelimited("non-NCQ command in flight, deferring command\n");
 			return ATA_DEFER_LINK;
+		}
+		pr_err("NCQ command in flight, scheduling EH\n");
 		return ATA_DEFER_ISSUE_VIA_EH;
 	}
 }
@@ -4840,6 +4855,10 @@ void __ata_qc_complete(struct ata_queued_cmd *qc)
 	struct ata_port *ap;
 	struct ata_link *link;
 
+	if (qc->flags & ATA_QCFLAG_ISSUED_VIA_EH)
+		pr_err("%s: issued_via_eh cmd. qc->active ? %d\n", __func__,
+			!!(qc->flags & ATA_QCFLAG_ACTIVE));
+
 	if (WARN_ON_ONCE(!(qc->flags & ATA_QCFLAG_ACTIVE)))
 		return;
 
@@ -4923,6 +4942,9 @@ void ata_qc_complete_success(struct ata_queued_cmd *qc)
 	bool issued_via_eh = qc->flags & ATA_QCFLAG_ISSUED_VIA_EH;
 
 	WARN_ON_ONCE(ata_port_is_frozen(ap));
+
+	if (issued_via_eh)
+		pr_err("%s: issued_via_eh cmd\n", __func__);
 
 	/* read result TF if requested */
 	if (qc->flags & ATA_QCFLAG_RESULT_TF)
