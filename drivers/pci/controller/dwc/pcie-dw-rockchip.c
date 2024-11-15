@@ -222,6 +222,9 @@ static int rockchip_pcie_host_init(struct dw_pcie_rp *pp)
 	struct device *dev = rockchip->pci.dev;
 	int irq, ret;
 
+	dw_pcie_writel_dbi2(pci, PCI_BASE_ADDRESS_0, 0x0);
+	dw_pcie_writel_dbi2(pci, PCI_BASE_ADDRESS_1, 0x0);
+
 	irq = of_irq_get_byname(dev->of_node, "legacy");
 	if (irq < 0)
 		return irq;
