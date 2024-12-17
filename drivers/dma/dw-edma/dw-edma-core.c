@@ -422,6 +422,9 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 			return NULL;
 		if (!xfer->xfer.il->src_inc || !xfer->xfer.il->dst_inc)
 			return NULL;
+	} else if (xfer->type == EDMA_XFER_MEMCPY) {
+		if (!xfer->xfer.memcpy.len)
+			return NULL;
 	} else {
 		return NULL;
 	}
@@ -437,6 +440,9 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 	if (xfer->type == EDMA_XFER_INTERLEAVED) {
 		src_addr = xfer->xfer.il->src_start;
 		dst_addr = xfer->xfer.il->dst_start;
+	} else if (xfer->type == EDMA_XFER_MEMCPY) {
+		src_addr = xfer->xfer.memcpy.src;
+		dst_addr = xfer->xfer.memcpy.dst;
 	} else {
 		src_addr = chan->config.src_addr;
 		dst_addr = chan->config.dst_addr;
@@ -455,6 +461,8 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 	} else if (xfer->type == EDMA_XFER_INTERLEAVED) {
 		cnt = xfer->xfer.il->numf * xfer->xfer.il->frame_size;
 		fsz = xfer->xfer.il->frame_size;
+	} else if (xfer->type == EDMA_XFER_MEMCPY) {
+		cnt = 1;
 	}
 
 	for (i = 0; i < cnt; i++) {
@@ -477,6 +485,8 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 			burst->sz = sg_dma_len(sg);
 		else if (xfer->type == EDMA_XFER_INTERLEAVED)
 			burst->sz = xfer->xfer.il->sgl[i % fsz].size;
+		else if (xfer->type == EDMA_XFER_MEMCPY)
+			burst->sz = xfer->xfer.memcpy.len;
 
 		chunk->ll_region.sz += burst->sz;
 		desc->alloc_sz += burst->sz;
@@ -495,7 +505,8 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 				 * and destination addresses are increased
 				 * by the same portion (data length)
 				 */
-			} else if (xfer->type == EDMA_XFER_INTERLEAVED) {
+			} else if (xfer->type == EDMA_XFER_INTERLEAVED ||
+				   xfer->type == EDMA_XFER_MEMCPY) {
 				burst->dar = dst_addr;
 			}
 		} else {
@@ -512,7 +523,8 @@ dw_edma_device_transfer(struct dw_edma_transfer *xfer)
 				 * and destination addresses are increased
 				 * by the same portion (data length)
 				 */
-			}  else if (xfer->type == EDMA_XFER_INTERLEAVED) {
+			}  else if (xfer->type == EDMA_XFER_INTERLEAVED ||
+				    xfer->type == EDMA_XFER_MEMCPY) {
 				burst->sar = src_addr;
 			}
 		}
@@ -591,6 +603,40 @@ dw_edma_device_prep_interleaved_dma(struct dma_chan *dchan,
 	xfer.xfer.il = ilt;
 	xfer.flags = flags;
 	xfer.type = EDMA_XFER_INTERLEAVED;
+
+	return dw_edma_device_transfer(&xfer);
+}
+
+static struct dma_async_tx_descriptor *
+dw_edma_device_prep_dma_memcpy(struct dma_chan *dchan, dma_addr_t dst,
+			       dma_addr_t src, size_t len, unsigned long flags)
+{
+	struct dw_edma_chan *chan = dchan2dw_edma_chan(dchan);
+	enum dma_transfer_direction direction;
+	struct dw_edma_transfer xfer;
+
+	if (chan->dw->chip->flags & DW_EDMA_CHIP_LOCAL) {
+		if (chan->dir == EDMA_DIR_READ)
+			direction = DMA_DEV_TO_MEM;
+		else
+			direction = DMA_MEM_TO_DEV;
+	} else {
+		if (chan->dir == EDMA_DIR_WRITE)
+			direction = DMA_DEV_TO_MEM;
+		else
+			direction = DMA_MEM_TO_DEV;
+	}
+
+	xfer.dchan = dchan;
+	xfer.direction = direction;
+	xfer.xfer.memcpy.dst = dst;
+	xfer.xfer.memcpy.src = src;
+	xfer.xfer.memcpy.len = len;
+	xfer.flags = flags;
+	xfer.type = EDMA_XFER_MEMCPY;
+
+	/* DMA_MEMCPY does not need an initial dmaengine_slave_config() call */
+	chan->configured = true;
 
 	return dw_edma_device_transfer(&xfer);
 }
@@ -787,6 +833,7 @@ static int dw_edma_channel_setup(struct dw_edma *dw, u32 wr_alloc, u32 rd_alloc)
 	dma_cap_set(DMA_CYCLIC, dma->cap_mask);
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
 	dma_cap_set(DMA_INTERLEAVE, dma->cap_mask);
+	dma_cap_set(DMA_MEMCPY, dma->cap_mask);
 	dma->directions = BIT(DMA_DEV_TO_MEM) | BIT(DMA_MEM_TO_DEV);
 	dma->src_addr_widths = BIT(DMA_SLAVE_BUSWIDTH_4_BYTES);
 	dma->dst_addr_widths = BIT(DMA_SLAVE_BUSWIDTH_4_BYTES);
@@ -806,6 +853,7 @@ static int dw_edma_channel_setup(struct dw_edma *dw, u32 wr_alloc, u32 rd_alloc)
 	dma->device_prep_slave_sg = dw_edma_device_prep_slave_sg;
 	dma->device_prep_dma_cyclic = dw_edma_device_prep_dma_cyclic;
 	dma->device_prep_interleaved_dma = dw_edma_device_prep_interleaved_dma;
+	dma->device_prep_dma_memcpy = dw_edma_device_prep_dma_memcpy;
 
 	dma_set_max_seg_size(dma->dev, U32_MAX);
 

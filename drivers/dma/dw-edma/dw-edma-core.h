@@ -36,7 +36,8 @@ enum dw_edma_status {
 enum dw_edma_xfer_type {
 	EDMA_XFER_SCATTER_GATHER = 0,
 	EDMA_XFER_CYCLIC,
-	EDMA_XFER_INTERLEAVED
+	EDMA_XFER_INTERLEAVED,
+	EDMA_XFER_MEMCPY
 };
 
 struct dw_edma_chan;
@@ -139,12 +140,19 @@ struct dw_edma_cyclic {
 	size_t				cnt;
 };
 
+struct dw_edma_memcpy {
+	dma_addr_t			dst;
+	dma_addr_t			src;
+	size_t				len;
+};
+
 struct dw_edma_transfer {
 	struct dma_chan			*dchan;
 	union dw_edma_xfer {
 		struct dw_edma_sg		sg;
 		struct dw_edma_cyclic		cyclic;
 		struct dma_interleaved_template *il;
+		struct dw_edma_memcpy		memcpy;
 	} xfer;
 	enum dma_transfer_direction	direction;
 	unsigned long			flags;
