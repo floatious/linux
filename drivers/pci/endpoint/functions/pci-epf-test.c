@@ -123,11 +123,9 @@ static int pci_epf_test_data_transfer(struct pci_epf_test *epf_test,
 {
 	struct dma_chan *chan = (dir == DMA_MEM_TO_DEV) ?
 				 epf_test->dma_chan_tx : epf_test->dma_chan_rx;
-	dma_addr_t dma_local = (dir == DMA_MEM_TO_DEV) ? dma_src : dma_dst;
 	enum dma_ctrl_flags flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT;
 	struct pci_epf *epf = epf_test->epf;
 	struct dma_async_tx_descriptor *tx;
-	struct dma_slave_config sconf = {};
 	struct device *dev = &epf->dev;
 	int ret;
 
@@ -136,24 +134,7 @@ static int pci_epf_test_data_transfer(struct pci_epf_test *epf_test,
 		return -EINVAL;
 	}
 
-	if (epf_test->dma_private) {
-		sconf.direction = dir;
-		if (dir == DMA_MEM_TO_DEV)
-			sconf.dst_addr = dma_remote;
-		else
-			sconf.src_addr = dma_remote;
-
-		if (dmaengine_slave_config(chan, &sconf)) {
-			dev_err(dev, "DMA slave config fail\n");
-			return -EIO;
-		}
-		tx = dmaengine_prep_slave_single(chan, dma_local, len, dir,
-						 flags);
-	} else {
-		tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, len,
-					       flags);
-	}
-
+	tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, len, flags);
 	if (!tx) {
 		dev_err(dev, "Failed to prepare DMA memcpy\n");
 		return -EIO;
@@ -225,7 +206,8 @@ static int pci_epf_test_init_dma_chan(struct pci_epf_test *epf_test)
 	filter.dma_mask = BIT(DMA_DEV_TO_MEM);
 
 	dma_cap_zero(mask);
-	dma_cap_set(DMA_SLAVE, mask);
+	dma_cap_set(DMA_PRIVATE, mask);
+	dma_cap_set(DMA_MEMCPY, mask);
 	dma_chan = dma_request_channel(mask, epf_dma_filter_fn, &filter);
 	if (!dma_chan) {
 		dev_info(dev, "Failed to get private DMA rx channel. Falling back to generic one\n");
