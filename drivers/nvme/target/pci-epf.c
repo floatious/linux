@@ -302,7 +302,8 @@ static void nvmet_pci_epf_init_dma(struct nvmet_pci_epf *nvme_epf)
 	mutex_init(&nvme_epf->dma_tx_lock);
 
 	dma_cap_zero(mask);
-	dma_cap_set(DMA_SLAVE, mask);
+	dma_cap_set(DMA_PRIVATE, mask);
+	dma_cap_set(DMA_MEMCPY, mask);
 
 	filter.dev = epf->epc->dev.parent;
 	filter.dma_mask = BIT(DMA_DEV_TO_MEM);
@@ -363,48 +364,35 @@ static int nvmet_pci_epf_dma_transfer(struct nvmet_pci_epf *nvme_epf,
 {
 	struct pci_epf *epf = nvme_epf->epf;
 	struct dma_async_tx_descriptor *desc;
-	struct dma_slave_config sconf = {};
 	struct device *dev = &epf->dev;
 	struct device *dma_dev;
-	struct dma_chan *chan;
+	struct dma_chan *chan = dir == DMA_FROM_DEVICE ?
+		nvme_epf->dma_rx_chan : nvme_epf->dma_tx_chan;
 	dma_cookie_t cookie;
-	dma_addr_t dma_addr;
-	struct mutex *lock;
+	dma_addr_t dma_addr, dma_dst, dma_src;
 	int ret;
-
-	switch (dir) {
-	case DMA_FROM_DEVICE:
-		lock = &nvme_epf->dma_rx_lock;
-		chan = nvme_epf->dma_rx_chan;
-		sconf.direction = DMA_DEV_TO_MEM;
-		sconf.src_addr = seg->pci_addr;
-		break;
-	case DMA_TO_DEVICE:
-		lock = &nvme_epf->dma_tx_lock;
-		chan = nvme_epf->dma_tx_chan;
-		sconf.direction = DMA_MEM_TO_DEV;
-		sconf.dst_addr = seg->pci_addr;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	mutex_lock(lock);
 
 	dma_dev = dmaengine_get_dma_device(chan);
 	dma_addr = dma_map_single(dma_dev, seg->buf, seg->length, dir);
 	ret = dma_mapping_error(dma_dev, dma_addr);
 	if (ret)
-		goto unlock;
+		return ret;
 
-	ret = dmaengine_slave_config(chan, &sconf);
-	if (ret) {
-		dev_err(dev, "Failed to configure DMA channel\n");
-		goto unmap;
+	switch (dir) {
+	case DMA_FROM_DEVICE:
+		dma_src = seg->pci_addr;
+		dma_dst = dma_addr;
+		break;
+	case DMA_TO_DEVICE:
+		dma_dst = seg->pci_addr;
+		dma_src = dma_addr;
+		break;
+	default:
+		return -EINVAL;
 	}
 
-	desc = dmaengine_prep_slave_single(chan, dma_addr, seg->length,
-					   sconf.direction, DMA_CTRL_ACK);
+	desc = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, seg->length,
+					 DMA_CTRL_ACK);
 	if (!desc) {
 		dev_err(dev, "Failed to prepare DMA\n");
 		ret = -EIO;
@@ -427,9 +415,6 @@ static int nvmet_pci_epf_dma_transfer(struct nvmet_pci_epf *nvme_epf,
 
 unmap:
 	dma_unmap_single(dma_dev, dma_addr, seg->length, dir);
-
-unlock:
-	mutex_unlock(lock);
 
 	return ret;
 }
