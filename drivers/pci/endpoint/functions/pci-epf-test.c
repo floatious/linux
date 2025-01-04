@@ -86,7 +86,8 @@ static struct pci_epf_header test_header = {
 	.interrupt_pin	= PCI_INTERRUPT_INTA,
 };
 
-static size_t bar_size[] = { 512, 512, 1024, 16384, 131072, 1048576 };
+//static size_t bar_size[] = { 512, 512, 1024, 16384, 131072, 1048576 };
+static size_t bar_size[] = { SZ_1M, SZ_1M, SZ_2M, SZ_2M, SZ_4M, SZ_4M };
 
 static void pci_epf_test_dma_callback(void *param)
 {
