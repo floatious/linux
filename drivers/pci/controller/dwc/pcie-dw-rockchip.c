@@ -42,6 +42,7 @@
 #define  PCIE_CLIENT_LD_RQ_RST_GRT	FIELD_PREP_WM16(BIT(3), 1)
 #define  PCIE_CLIENT_ENABLE_LTSSM	FIELD_PREP_WM16(BIT(2), 1)
 #define  PCIE_CLIENT_DISABLE_LTSSM	FIELD_PREP_WM16(BIT(2), 0)
+#define  PCIE_CLIENT_ENABLE_SRIS	FIELD_PREP_WM16(BIT(11), 1)
 
 /* Interrupt Status Register Related to Legacy Interrupt */
 #define PCIE_CLIENT_INTR_STATUS_LEGACY	0x8
@@ -548,8 +549,10 @@ static irqreturn_t rockchip_pcie_ep_sys_irq_thread(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static int rockchip_pcie_configure_rc(struct rockchip_pcie *rockchip)
+static int rockchip_pcie_configure_rc(struct platform_device *pdev,
+				      struct rockchip_pcie *rockchip)
 {
+	struct device *dev = &pdev->dev;
 	struct dw_pcie_rp *pp;
 	u32 val;
 
@@ -560,9 +563,14 @@ static int rockchip_pcie_configure_rc(struct rockchip_pcie *rockchip)
 	val = FIELD_PREP_WM16(PCIE_LTSSM_ENABLE_ENHANCE, 1);
 	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_HOT_RESET_CTRL);
 
-	rockchip_pcie_writel_apb(rockchip,
-				 PCIE_CLIENT_SET_MODE(PCIE_CLIENT_MODE_RC),
-				 PCIE_CLIENT_GENERAL_CON);
+	/*
+	 * TODO: Add a proper DT property for SRIS. For now (since SRIS requires
+	 * Gen3 PHY), enable SRIS unconditionally for the Gen3 PHY.
+	 */
+	val = PCIE_CLIENT_SET_MODE(PCIE_CLIENT_MODE_RC);
+	if (of_pci_get_max_link_speed(dev->of_node) == 3)
+		val |= PCIE_CLIENT_ENABLE_SRIS;
+	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_GENERAL_CON);
 
 	pp = &rockchip->pci.pp;
 	pp->ops = &rockchip_pcie_host_ops;
@@ -600,9 +608,14 @@ static int rockchip_pcie_configure_ep(struct platform_device *pdev,
 	      FIELD_PREP_WM16(PCIE_LTSSM_APP_DLY2_EN, 1);
 	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_HOT_RESET_CTRL);
 
-	rockchip_pcie_writel_apb(rockchip,
-				 PCIE_CLIENT_SET_MODE(PCIE_CLIENT_MODE_EP),
-				 PCIE_CLIENT_GENERAL_CON);
+	/*
+	 * TODO: Add a proper DT property for SRIS. For now, enable SRIS mode
+	 * unconditionally for the Gen3 PHY.
+	 */
+	val = PCIE_CLIENT_SET_MODE(PCIE_CLIENT_MODE_EP);
+	if (of_pci_get_max_link_speed(dev->of_node) == 3)
+		val |= PCIE_CLIENT_ENABLE_SRIS;
+	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_GENERAL_CON);
 
 	rockchip->pci.ep.ops = &rockchip_pcie_ep_ops;
 	rockchip->pci.ep.page_size = SZ_64K;
@@ -686,7 +699,7 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 
 	switch (data->mode) {
 	case DW_PCIE_RC_TYPE:
-		ret = rockchip_pcie_configure_rc(rockchip);
+		ret = rockchip_pcie_configure_rc(pdev, rockchip);
 		if (ret)
 			goto deinit_clk;
 		break;
