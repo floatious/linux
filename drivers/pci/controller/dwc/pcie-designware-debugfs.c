@@ -561,6 +561,33 @@ err_deinit:
 	return ret;
 }
 
+static int dwc_pcie_ltssm_status_show(struct seq_file *s, void *v)
+{
+	struct dw_pcie *pci = s->private;
+	enum dw_pcie_ltssm val;
+
+	val = dw_pcie_get_ltssm(pci);
+	seq_printf(s, "%s (0x%02x)\n", dw_ltssm_sts_string(val), val);
+
+	return 0;
+}
+
+static int dwc_pcie_ltssm_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, dwc_pcie_ltssm_status_show, inode->i_private);
+}
+
+static const struct file_operations dwc_pcie_ltssm_status_ops = {
+	.open = dwc_pcie_ltssm_status_open,
+	.read = seq_read,
+};
+
+static void dwc_pcie_ltssm_debugfs_init(struct dw_pcie *pci, struct dentry *dir)
+{
+	debugfs_create_file("ltssm_status", 0444, dir, pci,
+			    &dwc_pcie_ltssm_status_ops);
+}
+
 void dwc_pcie_debugfs_deinit(struct dw_pcie *pci)
 {
 	dwc_pcie_rasdes_debugfs_deinit(pci);
@@ -590,6 +617,8 @@ int dwc_pcie_debugfs_init(struct dw_pcie *pci)
 	ret = dwc_pcie_rasdes_debugfs_init(pci, dir);
 	if (ret)
 		dev_dbg(dev, "rasdes debugfs init failed\n");
+
+	dwc_pcie_ltssm_debugfs_init(pci, dir);
 
 	return 0;
 }
