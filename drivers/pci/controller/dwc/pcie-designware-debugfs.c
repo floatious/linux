@@ -50,6 +50,8 @@ struct dwc_pcie_vsec_id {
 	u8 vsec_rev;
 };
 
+#define PCI_VENDOR_ID_ROCKCHIP 0x1d87
+
 /*
  * VSEC IDs are allocated by the vendor, so a given ID may mean different
  * things to different vendors. See PCIe r6.0, sec 7.9.5.2.
@@ -62,6 +64,8 @@ static const struct dwc_pcie_vsec_id dwc_pcie_vsec_ids[] = {
 	{ .vendor_id = PCI_VENDOR_ID_QCOM,
 		.vsec_id = 0x02, .vsec_rev = 0x4 },
 	{ .vendor_id = PCI_VENDOR_ID_SAMSUNG,
+		.vsec_id = 0x02, .vsec_rev = 0x4 },
+	{ .vendor_id = PCI_VENDOR_ID_ROCKCHIP,
 		.vsec_id = 0x02, .vsec_rev = 0x4 },
 	{} /* terminator */
 };
