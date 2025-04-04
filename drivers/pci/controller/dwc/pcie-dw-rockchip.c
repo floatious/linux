@@ -8,6 +8,7 @@
  * Author: Simon Xue <xxm@rock-chips.com>
  */
 
+#define DEBUG 1
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/gpio/consumer.h>
