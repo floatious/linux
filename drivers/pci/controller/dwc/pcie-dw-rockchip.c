@@ -53,6 +53,9 @@
 #define PCIE_LTSSM_ENABLE_ENHANCE	BIT(4)
 #define PCIE_LTSSM_STATUS_MASK		GENMASK(5, 0)
 
+#define PCIE_EP_STATE_DISABLED		0
+#define PCIE_EP_STATE_ENABLED		1
+
 struct rockchip_pcie {
 	struct dw_pcie pci;
 	void __iomem *apb_base;
@@ -64,6 +67,8 @@ struct rockchip_pcie {
 	struct regulator *vpcie3v3;
 	struct irq_domain *irq_domain;
 	const struct rockchip_pcie_of_data *data;
+	unsigned int perst_irq;
+	int ep_state;
 };
 
 struct rockchip_pcie_of_data {
@@ -218,12 +223,18 @@ static int rockchip_pcie_start_link(struct dw_pcie *pci)
 	msleep(100);
 	gpiod_set_value_cansleep(rockchip->rst_gpio, 1);
 
+	if (rockchip->data->mode == DW_PCIE_EP_TYPE)
+		enable_irq(rockchip->perst_irq);
+
 	return 0;
 }
 
 static void rockchip_pcie_stop_link(struct dw_pcie *pci)
 {
 	struct rockchip_pcie *rockchip = to_rockchip_pcie(pci);
+
+	if (rockchip->data->mode == DW_PCIE_EP_TYPE)
+		disable_irq(rockchip->perst_irq);
 
 	rockchip_pcie_disable_ltssm(rockchip);
 }
@@ -377,28 +388,6 @@ static int rockchip_pcie_clk_init(struct rockchip_pcie *rockchip)
 	return 0;
 }
 
-static int rockchip_pcie_resource_get(struct platform_device *pdev,
-				      struct rockchip_pcie *rockchip)
-{
-	rockchip->apb_base = devm_platform_ioremap_resource_byname(pdev, "apb");
-	if (IS_ERR(rockchip->apb_base))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rockchip->apb_base),
-				     "failed to map apb registers\n");
-
-	rockchip->rst_gpio = devm_gpiod_get_optional(&pdev->dev, "reset",
-						     GPIOD_OUT_LOW);
-	if (IS_ERR(rockchip->rst_gpio))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rockchip->rst_gpio),
-				     "failed to get reset gpio\n");
-
-	rockchip->rst = devm_reset_control_array_get_exclusive(&pdev->dev);
-	if (IS_ERR(rockchip->rst))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rockchip->rst),
-				     "failed to get reset lines\n");
-
-	return 0;
-}
-
 static int rockchip_pcie_phy_init(struct rockchip_pcie *rockchip)
 {
 	struct device *dev = rockchip->pci.dev;
@@ -424,6 +413,165 @@ static void rockchip_pcie_phy_deinit(struct rockchip_pcie *rockchip)
 {
 	phy_exit(rockchip->phy);
 	phy_power_off(rockchip->phy);
+}
+
+static int rockchip_perst_assert(struct rockchip_pcie *rockchip)
+{
+	int ret;
+
+	if (rockchip->ep_state == PCIE_EP_STATE_DISABLED)
+		return 0;
+
+	/* We always have refclk, so cleanup immediately */
+	pci_epc_deinit_notify(rockchip->pci.ep.epc);
+	dw_pcie_ep_cleanup(&rockchip->pci.ep);
+
+	rockchip_pcie_writel_apb(rockchip, PCIE_CLIENT_DISABLE_LTSSM,
+				 PCIE_CLIENT_GENERAL_CONTROL);
+
+	ret = reset_control_assert(rockchip->rst);
+	if (ret)
+		return ret;
+
+	clk_bulk_disable_unprepare(rockchip->clk_cnt, rockchip->clks);
+
+	rockchip_pcie_phy_deinit(rockchip);
+
+	if (rockchip->vpcie3v3)
+		regulator_disable(rockchip->vpcie3v3);
+
+	rockchip->ep_state = PCIE_EP_STATE_DISABLED;
+
+	return 0;
+}
+
+static int rockchip_perst_deassert(struct rockchip_pcie *rockchip)
+{
+	int ret;
+	u32 val;
+
+	if (rockchip->ep_state == PCIE_EP_STATE_ENABLED)
+		return 0;
+
+	if (rockchip->vpcie3v3) {
+		ret = regulator_enable(rockchip->vpcie3v3);
+		if (ret)
+			return ret; //TODO: add goto error
+	}
+
+	ret = rockchip_pcie_phy_init(rockchip);
+	if (ret)
+		return ret; //TODO: add goto error
+
+	ret = reset_control_deassert(rockchip->rst);
+	if (ret)
+		return ret; //TODO: add goto error
+
+	ret = rockchip_pcie_clk_init(rockchip);
+	if (ret)
+		return ret;
+
+	/* This function should be the same as configure_ep(), except ep_init() */
+
+	/* LTSSM enable control mode */
+	val = HIWORD_UPDATE_BIT(PCIE_LTSSM_ENABLE_ENHANCE);
+	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_HOT_RESET_CTRL);
+
+	rockchip_pcie_writel_apb(rockchip, PCIE_CLIENT_EP_MODE,
+				 PCIE_CLIENT_GENERAL_CONTROL);
+
+	//TODO: only for rk3588
+	dw_pcie_ep_reset_bar(&rockchip->pci, BAR_4);
+
+	ret = dw_pcie_ep_init_registers(&rockchip->pci.ep);
+	if (ret) {
+		//dev_err(dev, "Failed to complete initialization: %d\n", ret);
+		pr_err("Failed to complete initialization: %d\n", ret);
+		//TODO: add goto error
+		return ret;
+	}
+
+	pci_epc_init_notify(rockchip->pci.ep.epc);
+
+	/* unmask DLL up/down indicator and hot reset/link-down reset */
+	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED | PCIE_LINK_REQ_RST_NOT_INT, 0);
+	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_INTR_MASK_MISC);
+
+	rockchip_pcie_enable_ltssm(rockchip);
+
+	rockchip->ep_state = PCIE_EP_STATE_ENABLED;
+
+	return 0;
+}
+
+static irqreturn_t rockchip_pcie_ep_perst_irq_thread(int irq, void *data)
+{
+	struct rockchip_pcie *rockchip = data;
+	int perst;
+
+	perst = gpiod_get_value(rockchip->rst_gpio);
+	if (perst) {
+		pr_err("pci: PERST asserted by host. Shutting down the PCIe link!\n");
+		rockchip_perst_assert(rockchip);
+	} else {
+		pr_err("pci: PERST de-asserted by host. Starting link training!\n");
+		rockchip_perst_deassert(rockchip);
+	}
+
+	return IRQ_HANDLED;
+}
+
+static int rockchip_pcie_resource_get(struct platform_device *pdev,
+				      struct rockchip_pcie *rockchip)
+{
+	rockchip->apb_base = devm_platform_ioremap_resource_byname(pdev, "apb");
+	if (IS_ERR(rockchip->apb_base))
+		return dev_err_probe(&pdev->dev, PTR_ERR(rockchip->apb_base),
+				     "failed to map apb registers\n");
+
+	if (rockchip->data->mode == DW_PCIE_RC_TYPE)
+		rockchip->rst_gpio = devm_gpiod_get_optional(&pdev->dev,
+							     "reset",
+							     GPIOD_OUT_LOW);
+	else if (rockchip->data->mode == DW_PCIE_EP_TYPE)
+		rockchip->rst_gpio =
+			devm_gpiod_get_optional(&pdev->dev, "reset", GPIOD_IN);
+	if (IS_ERR(rockchip->rst_gpio))
+		return PTR_ERR(rockchip->rst_gpio);
+
+	if (rockchip->data->mode == DW_PCIE_EP_TYPE) {
+		int ret;
+
+		ret = gpiod_to_irq(rockchip->rst_gpio);
+		if (ret < 0) {
+			dev_err(&pdev->dev,
+				"Failed to get IRQ for PERST GPIO: %d\n", ret);
+			return ret;
+		}
+		rockchip->perst_irq = (unsigned int)ret;
+
+		irq_set_status_flags(rockchip->perst_irq, IRQ_NOAUTOEN);
+
+		rockchip->ep_state = PCIE_EP_STATE_DISABLED;
+
+		ret = devm_request_threaded_irq(
+			&pdev->dev, rockchip->perst_irq, NULL,
+			rockchip_pcie_ep_perst_irq_thread,
+			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
+			IRQF_ONESHOT, "perst_irq", rockchip);
+		if (ret < 0) {
+			dev_err(&pdev->dev,
+				"Failed to request IRQ for PERST: %d\n", ret);
+			return ret;
+		}
+	}
+
+	rockchip->rst = devm_reset_control_array_get_exclusive(&pdev->dev);
+	if (IS_ERR(rockchip->rst))
+		return dev_err_probe(&pdev->dev, PTR_ERR(rockchip->rst),
+				     "failed to get reset lines\n");
+
+	return 0;
 }
 
 static const struct dw_pcie_ops dw_pcie_ops = {
@@ -588,6 +736,8 @@ static int rockchip_pcie_configure_ep(struct platform_device *pdev,
 	/* unmask DLL up/down indicator and hot reset/link-down reset */
 	val = HIWORD_UPDATE(PCIE_RDLH_LINK_UP_CHGED | PCIE_LINK_REQ_RST_NOT_INT, 0);
 	rockchip_pcie_writel_apb(rockchip, val, PCIE_CLIENT_INTR_MASK_MISC);
+
+	rockchip->ep_state = PCIE_EP_STATE_ENABLED;
 
 	return ret;
 }
