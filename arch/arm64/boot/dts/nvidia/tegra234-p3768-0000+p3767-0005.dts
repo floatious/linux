@@ -16,4 +16,10 @@
 	sound {
 		label = "NVIDIA Jetson Orin Nano APE";
 	};
+
+	firmware {
+		uefi {
+			firmware-media-overlays-applied;
+		};
+	};
 };
