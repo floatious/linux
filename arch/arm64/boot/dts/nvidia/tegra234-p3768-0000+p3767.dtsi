@@ -177,7 +177,7 @@
 
 		/* C4 - M.2 Key-M */
 		pcie@14160000 {
-			status = "okay";
+			status = "disabled";
 
 			vddio-pex-ctl-supply = <&vdd_1v8_ao>;
 
@@ -187,6 +187,8 @@
 		};
 
 		pcie-ep@14160000 {/* C4 - End Point */
+			status = "okay";
+
 			phys = <&p2u_hsio_4>, <&p2u_hsio_5>, <&p2u_hsio_6>,
 					<&p2u_hsio_7>;
 			phy-names = "p2u-0", "p2u-1", "p2u-2", "p2u-3";
