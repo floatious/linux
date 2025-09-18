@@ -4932,8 +4932,9 @@
 
 			pinctrl-names = "default";
 			pinctrl-0 = <&pex_rst_c4_in_state>;
-			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH>;  /* controller interrupt */
-			interrupt-names = "intr";
+			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH>,  /* controller interrupt */
+				     <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH>;  /* eDMA is using same IRQ */
+			interrupt-names = "intr", "dma";
 			nvidia,bpmp = <&bpmp 4>;
 			nvidia,enable-ext-refclk;
 			nvidia,aspm-cmrt-us = <60>;
