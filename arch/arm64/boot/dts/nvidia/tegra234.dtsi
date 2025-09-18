@@ -4919,10 +4919,11 @@
 			compatible = "nvidia,tegra234-pcie-ep";
 			power-domains = <&bpmp TEGRA234_POWER_DOMAIN_PCIEX4BB>;
 			reg = <0x00 0x14160000 0x0 0x00020000     /* appl registers (128K)      */
-				0x00 0x36040000 0x0 0x00040000    /* iATU_DMA reg space (256K)  */
+				0x00 0x36040000 0x0 0x00020000    /* iATU reg space (128K)  */
+				0x00 0x36060000 0x0 0x00020000    /* eDMA reg space (128K)  */
 				0x00 0x36080000 0x0 0x00040000    /* DBI space (256K)           */
 				0x21 0x40000000 0x3 0x00000000>;  /* Address Space (12G)        */
-			reg-names = "appl", "atu_dma", "dbi", "addr_space";
+			reg-names = "appl", "atu_dma", "dma", "dbi", "addr_space";
 			num-lanes = <4>;
 			clocks = <&bpmp TEGRA234_CLK_PEX0_C4_CORE>;
 			clock-names = "core";
