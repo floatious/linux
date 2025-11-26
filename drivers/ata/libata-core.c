@@ -4065,6 +4065,7 @@ static const struct ata_dev_quirk_value __ata_dev_max_sec_quirks[] = {
 	{ "LITEON CX1-JB*-HP",		NULL,		1024 },
 	{ "LITEON EP1-*",		NULL,		1024 },
 	{ "DELLBOSS VD",		"MV.R00-0",	8191 },
+	{ "QEMU HARDDISK",		"2.5+",		80 },
 	{ },
 };
 
@@ -4113,6 +4114,7 @@ static const struct ata_dev_quirks_entry __ata_dev_quirks[] = {
 
 	/* Weird ATAPI devices */
 	{ "TORiSAN DVD-ROM DRD-N216", NULL,	ATA_QUIRK_MAX_SEC },
+	{ "QEMU HARDDISK", "2.5+",	ATA_QUIRK_MAX_SEC },
 	{ "QUANTUM DAT    DAT72-000", NULL,	ATA_QUIRK_ATAPI_MOD16_DMA },
 	{ "Slimtype DVD A  DS8A8SH", NULL,	ATA_QUIRK_MAX_SEC_LBA48 },
 	{ "Slimtype DVD A  DS8A9SH", NULL,	ATA_QUIRK_MAX_SEC_LBA48 },
@@ -4389,8 +4391,10 @@ static u64 ata_dev_get_max_sec_quirk_value(struct ata_device *dev)
 
 #ifdef CONFIG_ATA_FORCE
 	const struct ata_force_ent *fe = ata_force_get_fe_for_dev(dev);
-	if (fe && (fe->param.quirk_on & ATA_QUIRK_MAX_SEC) && fe->param.value)
+	if (fe && (fe->param.quirk_on & ATA_QUIRK_MAX_SEC) && fe->param.value) {
 		val = fe->param.value;
+		ata_dev_err(dev, "using value from libata.force: %llu\n", val);
+	}
 #endif
 	if (val)
 		goto out;
@@ -4402,6 +4406,7 @@ static u64 ata_dev_get_max_sec_quirk_value(struct ata_device *dev)
 		if (glob_match(ad->model_num, model_num) &&
 		    (!ad->model_rev || glob_match(ad->model_rev, model_rev))) {
 			val = ad->val;
+			ata_dev_err(dev, "using value from device table: %llu\n", val);
 			break;
 		}
 		ad++;
